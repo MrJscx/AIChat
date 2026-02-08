@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIChat 数字大模型聊天助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" href="AIChat.ico" type="image/x-icon">
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-900">
+
+    <div class="max-w-3xl mx-auto px-4 py-8">
+        <!-- 头部卡片 -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6 flex justify-between items-center">
+            <div>
+                <h1 class="text-2xl font-bold text-indigo-600">AI Chat</h1>
+                <p class="text-slate-400 text-sm">基于七牛云 AIGC 接口 ----- 全服共享免费每日TOKENS总额1000K</p>
+            </div>
+            <div class="text-right">
+                <p class="text-xs text-slate-400 uppercase tracking-wider">Today's Tokens</p>
+                <p id="usageCount" class="text-2xl font-mono font-bold text-emerald-500">0</p>
+            </div>
+        </div>
+
+        <!-- 设置区域 -->
+        <div class="space-y-3 mb-6">
+            <!-- 第一行：模型选择和 ID 输入 (4:6 比例) -->
+            <div class="flex flex-row gap-3">
+                <select id="modelSelect" onchange="toggleCustomInput()" class="w-2/5 bg-white border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer">
+                    <option value="deepseek/deepseek-v3.2-exp-thinking">DeepSeek-V3.2-Exp-Thinking</option>
+                    <option value="qwen3-max-2026-01-23">千问3Max 2026 01 23</option>
+                    <option value="z-ai/glm-4.7">GLM 4.7</option>
+                    <option value="custom">-- 自定义模型 ID --</option>
+                </select>
+                <input id="customId" type="text" placeholder="已锁定官方模型" 
+                    class="w-3/5 border border-slate-200 rounded-xl px-4 py-3 outline-none transition-all duration-300 bg-slate-100 text-slate-400 opacity-50 pointer-events-none" 
+                    readonly>
+            </div>
+
+            <!-- 第二行：温度、上下文和清除按钮 -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <!-- 温度调节 -->
+                <div class="flex items-center bg-white border border-slate-200 rounded-xl px-4 py-2 shadow-sm">
+                    <!-- 增加 w-20 固定宽度，确保文字对齐 -->
+                    <span class="text-xs text-slate-400 mr-2 whitespace-nowrap font-medium w-20">
+                        温度(<span id="tempValue" class="text-indigo-600">0.7</span>):
+                    </span>
+                    <!-- 增加 flex-1 让进度条占据剩余空间，但通过 mx-2 稍微缩短两端 -->
+                    <input id="modelTemp" type="range" min="0" max="2" step="0.1" value="0.7" 
+                        class="flex-1 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 mx-2" 
+                        oninput="document.getElementById('tempValue').innerText=this.value">
+                </div>
+                
+                <!-- 上下文限制 -->
+                <div class="flex items-center bg-white border border-slate-200 rounded-xl px-4 py-2 shadow-sm">
+                    <!-- 同样设置 w-20 固定宽度，保持左右一致 -->
+                    <span class="text-xs text-slate-400 mr-2 whitespace-nowrap font-medium w-20">上下文(轮):</span>
+                    <input id="maxContext" type="number" min="1" max="50" value="15" class="flex-1 outline-none text-sm bg-transparent">
+                </div>
+                
+                <!-- 清除按钮 -->
+                <button onclick="clearChat()" class="bg-white text-red-500 border border-red-100 rounded-xl px-4 py-2 text-sm font-medium hover:bg-red-50 hover:border-red-200 transition-all shadow-sm">
+                    🗑️ 清除对话记录
+                </button>
+            </div>
+        </div>
+
+        <!-- 聊天窗口 -->
+        <div id="chatWindow" class="bg-white border border-slate-200 rounded-2xl h-[500px] overflow-y-auto p-6 mb-6 space-y-4 shadow-inner">
+            <div class="flex"><div class="bg-slate-100 px-4 py-2 rounded-2xl rounded-tl-none max-w-[85%] text-sm">您好！请选择模型并开始交流。</div></div>
+        </div>
+
+        <!-- 输入区域 -->
+        <div class="relative">
+            <input id="userInput" type="text" placeholder="输入您的问题..." class="w-full bg-white border border-slate-200 rounded-2xl pl-6 pr-24 py-4 shadow-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all">
+            <button onclick="handleSend()" id="sendBtn" class="absolute right-2 top-2 bottom-2 bg-indigo-600 text-white px-6 rounded-xl font-medium hover:bg-indigo-700 transition-colors">发送</button>
+        </div>
+    </div>
+
+    <script>
+        const modelSelect = document.getElementById('modelSelect');
+        const customId = document.getElementById('customId');
+        const usageCount = document.getElementById('usageCount');
+        const chatWindow = document.getElementById('chatWindow');
+        const STORAGE_KEY = 'ai_chat_history'; 
+    
+        let chatHistory = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    
+        window.onload = () => {
+            if (chatHistory.length > 0) {
+                chatWindow.innerHTML = ''; 
+                chatHistory.forEach(msg => {
+                    appendMsg(msg.content, msg.role === 'user' ? 'user' : 'ai');
+                });
+            }
+            fetchUsage();
+            toggleCustomInput(); // 初始化输入框状态
+        };
+    
+        function saveToLocal() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(chatHistory));
+        }
+    
+        // 控制自定义输入框的显示与禁用状态
+        function toggleCustomInput() {
+            const isCustom = modelSelect.value === 'custom';
+            if (isCustom) {
+                customId.readOnly = false;
+                customId.classList.remove('bg-slate-100', 'text-slate-400', 'opacity-50', 'pointer-events-none');
+                customId.classList.add('bg-white', 'text-slate-900', 'focus:ring-2', 'focus:ring-indigo-500');
+                customId.placeholder = "请输入模型 ID";
+                customId.focus();
+            } else {
+                customId.readOnly = true;
+                customId.value = "";
+                customId.classList.add('bg-slate-100', 'text-slate-400', 'opacity-50', 'pointer-events-none');
+                customId.classList.remove('bg-white', 'text-slate-900', 'focus:ring-2', 'focus:ring-indigo-500');
+                customId.placeholder = "仅自定义模型ID可输入";
+            }
+        }
+    
+        async function fetchUsage() {
+            try {
+                const res = await fetch('api.php?action=usage');
+                const data = await res.json();
+                usageCount.innerText = (data.total || 0).toLocaleString() + "K";
+            } catch (e) { usageCount.innerText = "Error"; }
+        }
+    
+        async function handleSend() {
+            const userInputElem = document.getElementById('userInput');
+            const text = userInputElem.value.trim();
+            let maxContext = parseInt(document.getElementById('maxContext').value) || 15;
+            const temperature = parseFloat(document.getElementById('modelTemp').value);
+
+            if (!text) return;
+    
+            const model = modelSelect.value === 'custom' ? customId.value : modelSelect.value;
+            if (!model) { alert("请指定模型 ID"); return; }
+    
+            if (chatHistory.length === 0) chatWindow.innerHTML = '';
+    
+            appendMsg(text, 'user');
+            userInputElem.value = '';
+            chatHistory.push({ role: "user", content: text });
+            
+            if (chatHistory.length > maxContext) chatHistory = chatHistory.slice(-maxContext);
+            saveToLocal();
+    
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            sendBtn.innerText = "...";
+    
+            // --- 修改部分：初始化显示“正在思考中” ---
+            const aiMsgDiv = appendMsg("", 'ai');
+            aiMsgDiv.innerHTML = '<i class="text-slate-400">正在思考中...</i>';
+            let fullReply = "";
+            let isFirstChunk = true; // 用于标记是否是接收到的第一个数据块
+            // ------------------------------------
+    
+            try {
+                const response = await fetch('api.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        model: model, 
+                        messages: chatHistory, 
+                        stream: true,
+                        temperature: temperature 
+                    })
+                });
+    
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = "";
+    
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+    
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed || trimmed === 'data: [DONE]') continue;
+                        if (trimmed.startsWith('data: ')) {
+                            try {
+                                const json = JSON.parse(trimmed.substring(6));
+                                const content = json.choices[0]?.delta?.content || "";
+                                if (content) {
+                                    // --- 修改部分：收到内容后清除“正在思考中” ---
+                                    if (isFirstChunk) {
+                                        aiMsgDiv.innerText = "";
+                                        isFirstChunk = false;
+                                    }
+                                    // ---------------------------------------
+                                    fullReply += content;
+                                    aiMsgDiv.innerText = fullReply;
+                                    chatWindow.scrollTop = chatWindow.scrollHeight;
+                                }
+                            } catch (e) { console.error("解析错误", e); }
+                        }
+                    }
+                }
+                chatHistory.push({ role: "assistant", content: fullReply });
+                saveToLocal();
+                fetchUsage();
+            } catch (e) {
+                aiMsgDiv.innerText = "错误：无法连接到服务器";
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.innerText = "发送";
+            }
+        }
+
+        
+        function clearChat() {
+            if (confirm("确定要清除所有对话记录吗？")) {
+                chatHistory = [];
+                localStorage.removeItem(STORAGE_KEY);
+                chatWindow.innerHTML = '';
+                appendMsg("对话记录已清空，请重新开始交流。", 'ai');
+            }
+        }
+    
+        function appendMsg(content, role) {
+            const div = document.createElement('div');
+            div.className = role === 'user' ? 'flex justify-end' : 'flex';
+            const inner = document.createElement('div');
+            inner.className = role === 'user' 
+                ? 'bg-indigo-600 text-white px-4 py-2 rounded-2xl rounded-tr-none max-w-[85%] text-sm shadow-sm'
+                : 'bg-slate-100 text-slate-800 px-4 py-2 rounded-2xl rounded-tl-none max-w-[85%] text-sm border border-slate-200';
+            inner.innerText = content;
+            div.appendChild(inner);
+            chatWindow.appendChild(div);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+            return inner;
+        }
+    
+        document.getElementById('userInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleSend();
+        });
+    </script>
+
+</body>
+</html>
